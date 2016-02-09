@@ -10,6 +10,9 @@ use player::{Player, PlayerState};
 
 use std::sync::{Mutex, Arc};
 
+extern crate rand;
+use rand::Rng;
+
 use protocol;
 pub use protocol::spirc::PlayStatus;
 
@@ -36,6 +39,7 @@ struct SpircInternal {
     last_command_msgid: u32,
 
     tracks: Vec<SpotifyId>,
+    ordered_tracks: Vec<SpotifyId>,
     index: u32,
 }
 
@@ -65,6 +69,7 @@ impl SpircManager {
             last_command_msgid: 0,
 
             tracks: Vec::new(),
+            ordered_tracks: Vec::new(),
             index: 0,
         })))
     }
@@ -167,6 +172,21 @@ impl SpircInternal {
             protocol::spirc::MessageType::kMessageTypeReplace => {
                 self.reload_tracks(&frame);
             }
+            protocol::spirc::MessageType::kMessageTypeShuffle => {
+                self.shuffle = frame.get_state().get_shuffle();
+                
+                if self.shuffle {
+                    self.shuffle_tracks();
+                    
+                    let current_track = self.ordered_tracks[self.index as usize];
+                    self.index = self.tracks.iter().position(|track| *track == current_track).unwrap() as u32;
+                } else {
+                    let current_track = self.tracks[self.index as usize];
+                    self.index = self.ordered_tracks.iter().position(|track| *track == current_track).unwrap() as u32;
+                    
+                    self.tracks = self.ordered_tracks.clone();
+                }
+            }
             protocol::spirc::MessageType::kMessageTypeNotify => {
                 if self.is_active && frame.get_device_state().get_is_active() {
                     self.is_active = false;
@@ -179,6 +199,12 @@ impl SpircInternal {
             _ => (),
         }
     }
+    
+    fn shuffle_tracks(&mut self) {
+        for i in 1..self.tracks.len() {
+            self.tracks.swap(i, rand::thread_rng().gen_range(0, i));
+        }
+    }
 
     fn reload_tracks(&mut self, ref frame: &protocol::spirc::Frame) {
         self.index = frame.get_state().get_playing_track_index();
@@ -188,6 +214,14 @@ impl SpircInternal {
                            .filter(|track| track.has_gid())
                            .map(|track| SpotifyId::from_raw(track.get_gid()))
                            .collect();
+        self.ordered_tracks = self.tracks.clone();
+        
+        if self.shuffle {
+            self.shuffle_tracks();
+            
+            let current_track = self.ordered_tracks[self.index as usize];
+            self.index = self.tracks.iter().position(|track| *track == current_track).unwrap() as u32;
+        }
     }
 
     // FIXME: this entire function is duplicated in notify_with_player_state, but the borrow
